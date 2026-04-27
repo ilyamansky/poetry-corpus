@@ -1,0 +1,10 @@
+{
+  "model": "deepseek/deepseek-v3.2",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Привет, это тестовый запрос к DeepSeek V3.2 через OpenRouter."
+    }
+  ],
+  "max_tokens": 100
+}

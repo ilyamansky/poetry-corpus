@@ -1,10 +1,29 @@
 // src/App.jsx
-import { useState, useEffect, useCallback } from "react";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  createContext,
+  useContext,
+} from "react";
+import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom"; // Добавлен Link
 import { X } from "lucide-react";
 import PoemList from "./components/PoemList";
 import FilterPanel from "./components/FilterPanel";
 import PoemPage from "./components/PoemPage";
+import StatisticsPage from "./components/StatisticsPage"; // Импорт нового компонента
+
+/* ----------  контекст для передачи данных  ---------- */
+const AppContext = createContext();
+
+function AppProvider({ children, value }) {
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+}
+
+// --- ЭКСПОРТИРУЕМ хук ---
+export function useAppContext() {
+  return useContext(AppContext);
+}
 
 /* ----------  нормализация лемм  ---------- */
 const normalizeLemmas = (raw) => {
@@ -29,15 +48,15 @@ const buildReverse = (norm) => {
   return rev;
 };
 
-function AppContent() {
+// --- Компонент для общих данных ---
+const DataProvider = ({ children }) => {
   const [poems, setPoems] = useState([]); // Теперь содержит объединенные данные
-  const [filteredPoems, setFilteredPoems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showFilters, setShowFilters] = useState(false);
-  const [activeFilters, setActiveFilters] = useState({});
 
   const [lemmas, setLemmas] = useState({});
   const [reverseLemmas, setReverseLemmas] = useState({}); // lemma -> Set(wordforms)
+
+  const [meterAnalysis, setMeterAnalysis] = useState([]); // <-- Новое состояние для данных метрики
 
   /* ----------  загрузка  ---------- */
   useEffect(() => {
@@ -54,7 +73,7 @@ function AppContent() {
 
         // Создаем Map из meter-analysis для быстрого поиска
         const meterMap = new Map(
-          meterAnalysisData.map((item) => [item.id, item])
+          meterAnalysisData.map((item) => [item.id, item]),
         );
 
         // Объединяем данные из poems_minimal и meter-analysis
@@ -71,9 +90,9 @@ function AppContent() {
         });
 
         setPoems(enriched);
-        setFilteredPoems(enriched);
         setLemmas(normalizedLemmas);
         setReverseLemmas(buildReverse(normalizedLemmas));
+        setMeterAnalysis(meterAnalysisData); // <-- Сохраняем отдельно
         setLoading(false);
       })
       .catch((e) => {
@@ -82,79 +101,99 @@ function AppContent() {
       });
   }, []);
 
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        Загрузка…
+      </div>
+    );
+  }
+
+  const appValue = { poems, meterAnalysis, lemmas, reverseLemmas }; // Передаём все необходимые данные
+
+  return <AppProvider value={appValue}>{children}</AppProvider>;
+};
+
+// --- Компонент для основного UI (Список, Фильтры, Детали) ---
+function AppContent({ poems, lemmas, reverseLemmas }) {
+  // Принимаем данные как пропсы
+  const [filteredPoems, setFilteredPoems] = useState(poems); // Инициализируем начальным значением
+  const [showFilters, setShowFilters] = useState(false);
+  const [activeFilters, setActiveFilters] = useState({});
+
   /* ----------  фильтрация  ---------- */
   const applyFilters = useCallback(
     (filters) => {
-      let res = [...poems];
+      let res = [...poems]; // Используем переданные poems
 
-      /* 1. обычный текстовый поиск */
+      /* 1. обычный текстовый поиск по отдельным словам */
       if (filters.search) {
-        const s = filters.search.toLowerCase();
-        res = res.filter((p) =>
-          [p.title, p.display_title, p.text, p.epigraph, p.dedication]
-            .filter(Boolean)
-            .some((txt) => txt.toLowerCase().includes(s))
-        );
+        const searchTerm = filters.search.toLowerCase().trim();
+        if (searchTerm) {
+          const cleanSearchTerm = searchTerm.replace(
+            /[.,;:!?()"\-–—\u2026\u00AB\u00BB]/g,
+            "",
+          );
+
+          res = res.filter((p) => {
+            const fullText = [
+              p.title,
+              p.display_title,
+              p.text,
+              p.epigraph,
+              p.dedication,
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+
+            const tokens = fullText
+              .split(/[\s\n]+/)
+              .map((t) => t.replace(/[.,;:!?()"\-–—\u2026\u00AB\u00BB]/g, ""))
+              .filter((w) => w);
+
+            return tokens.includes(cleanSearchTerm);
+          });
+        }
       }
 
-      /* 2. поиск по лемме без индекса */
-      if (filters.lemma) {
-        const lemma = filters.lemma.toLowerCase();
-        const wordforms = reverseLemmas[lemma];
-        console.log("🔍 Lemma:", lemma);
+      /* 2. поиск по лемме (-ам) - теперь ищем стихи, содержащие ВСЕ леммы */
+      if (filters.lemmas && filters.lemmas.length > 0) {
+        const targetLemmas = filters.lemmas.map((l) => l.toLowerCase());
         console.log(
-          "📦 Wordforms:",
-          wordforms ? [...wordforms] : "нет словоформ"
+          "🔍 Lemmas to search for (all must be present):",
+          targetLemmas,
         );
-        if (!wordforms || !wordforms.size) {
-          res = [];
-        } else {
-          res = res.filter((p) => {
-            const text = [
-              p.title,
-              p.display_title,
-              p.text,
-              p.epigraph,
-              p.dedication,
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .toLowerCase();
-            const tokens = text
-              .split(/[\s\n]+/) // по пробелам и переводам строк
-              .map((t) => t.replace(/[.,;:!?()"\-–—]/g, ""))
-              .filter((w) => w);
-            if (p.id === 1) console.log("📜 Poem 1 tokens:", tokens);
-            const hit = tokens.some((w) => wordforms.has(w));
-            if (hit) console.log("✅ Hit poem ID:", p.id);
-            return hit;
+
+        res = res.filter((p) => {
+          const text = [
+            p.title,
+            p.display_title,
+            p.text,
+            p.epigraph,
+            p.dedication,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+          const tokens = text
+            .split(/[\s\n]+/)
+            .map((t) => t.replace(/[.,;:!?()"\-–—\u2026\u00AB\u00BB]/g, ""))
+            .filter((w) => w);
+
+          const allLemmasFound = targetLemmas.every((targetLemma) => {
+            const wordformsForLemma = reverseLemmas[targetLemma]; // Используем переданные reverseLemmas
+            if (!wordformsForLemma) {
+              return false;
+            }
+            return tokens.some((token) => wordformsForLemma.has(token));
           });
-        }
-        console.log("📄 Отфильтровано стихов:", res.length);
-        // временно: показать, в каких стихах есть хоть одна форма "дождь"
-        if (lemma === "дождь") {
-          const allHits = poems.filter((p) => {
-            const text = [
-              p.title,
-              p.display_title,
-              p.text,
-              p.epigraph,
-              p.dedication,
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .toLowerCase();
-            const tokens = text
-              .split(/[\s\n]+/) // по пробелам и переводам строк
-              .map((t) => t.replace(/[.,;:!?()"\-–—]/g, ""))
-              .filter((w) => w);
-            return tokens.some((w) => wordforms.has(w));
-          });
-          console.log(
-            "📂 Все стихи с формами 'дождь':",
-            allHits.map((p) => p.id)
-          );
-        }
+
+          return allLemmasFound;
+        });
+
+        console.log("📄 After lemma filter, remaining poems:", res.length);
       }
 
       /* 3. фильтр по размеру */
@@ -164,21 +203,16 @@ function AppContent() {
 
       /* 4. фильтр по типу стихотворения */
       if (filters.poemType === "individual") {
-        res = res.filter((p) => !p.in_cycle); // Только если in_cycle === false
+        res = res.filter((p) => !p.in_cycle);
       } else if (filters.poemType === "in_cycle") {
-        res = res.filter((p) => p.in_cycle); // Только если in_cycle === true
+        res = res.filter((p) => p.in_cycle);
       } else if (filters.poemType === "cycles_with_names") {
-        res = res.filter((p) => p.in_cycle && p.cycle_has_title); // В цикле И цикл имеет название
+        res = res.filter((p) => p.in_cycle && p.cycle_has_title);
       } else if (filters.poemType === "cycles_without_names") {
-        res = res.filter((p) => p.in_cycle && !p.cycle_has_title); // В цикле И цикл НЕ имеет название
+        res = res.filter((p) => p.in_cycle && !p.cycle_has_title);
       }
 
-      /* 5. остальные фильтры без изменений (с учётом возможного конфликта с poemType) */
-      // Старые фильтры filters.in_cycle и filters.cycle_has_title теперь игнорируются, если активен filters.poemType
-      // if (filters.in_cycle !== undefined)
-      //   res = res.filter((p) => p.in_cycle === filters.in_cycle);
-      // if (filters.cycle_has_title !== undefined)
-      //   res = res.filter((p) => p.cycle_has_title === filters.cycle_has_title);
+      /* 5. остальные фильтры */
       if (filters.section)
         res = res.filter((p) => p.section_name === filters.section);
       if (filters.minLines)
@@ -192,7 +226,7 @@ function AppContent() {
       setActiveFilters(filters);
       setShowFilters(false);
     },
-    [poems, reverseLemmas]
+    [poems, reverseLemmas], // Зависимости теперь от пропсов
   );
 
   /* ----------  шапка  ---------- */
@@ -204,28 +238,27 @@ function AppContent() {
           {filteredPoems.length === 1
             ? "стихотворение"
             : filteredPoems.length % 10 >= 2 &&
-              filteredPoems.length % 10 <= 4 &&
-              (filteredPoems.length % 100 < 10 ||
-                filteredPoems.length % 100 >= 20)
-            ? "стихотворения"
-            : "стихотворений"}
+                filteredPoems.length % 10 <= 4 &&
+                (filteredPoems.length % 100 < 10 ||
+                  filteredPoems.length % 100 >= 20)
+              ? "стихотворения"
+              : "стихотворений"}
         </div>
       );
 
     const labels = [];
     if (activeFilters.search) labels.push(`Поиск: «${activeFilters.search}»`);
-    if (activeFilters.lemma) labels.push(`Лемма: «${activeFilters.lemma}»`);
-    if (activeFilters.meter) labels.push(`Размер: ${activeFilters.meter}`); // Добавлено
-    // Обновляем отображение типа стихотворения
+    if (activeFilters.lemmas && activeFilters.lemmas.length > 0) {
+      labels.push(`Леммы: «${activeFilters.lemmas.join("», «")}»`);
+    }
+    if (activeFilters.meter) labels.push(`Размер: ${activeFilters.meter}`);
     if (activeFilters.poemType === "individual")
       labels.push("Только отдельные стихи");
     if (activeFilters.poemType === "in_cycle") labels.push("Только в циклах");
-    if (activeFilters.cycle_has_title !== undefined)
-      labels.push(
-        activeFilters.cycle_has_title
-          ? "Циклы с названиями"
-          : "Циклы без названий"
-      );
+    if (activeFilters.poemType === "cycles_with_names")
+      labels.push("Циклы с названиями");
+    if (activeFilters.poemType === "cycles_without_names")
+      labels.push("Циклы без названий");
     if (activeFilters.section) labels.push(`Раздел: ${activeFilters.section}`);
     if (activeFilters.minLines || activeFilters.maxLines) {
       const min = activeFilters.minLines || 0;
@@ -256,7 +289,7 @@ function AppContent() {
           <button
             onClick={() => {
               setActiveFilters({});
-              setFilteredPoems(poems);
+              setFilteredPoems(poems); // Сброс к исходному списку
             }}
             className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
           >
@@ -269,96 +302,139 @@ function AppContent() {
           {filteredPoems.length === 1
             ? "стихотворение"
             : filteredPoems.length % 10 >= 2 &&
-              filteredPoems.length % 10 <= 4 &&
-              (filteredPoems.length % 100 < 10 ||
-                filteredPoems.length % 100 >= 20)
-            ? "стихотворения"
-            : "стихотворений"}
+                filteredPoems.length % 10 <= 4 &&
+                (filteredPoems.length % 100 < 10 ||
+                  filteredPoems.length % 100 >= 20)
+              ? "стихотворения"
+              : "стихотворений"}
         </div>
       </div>
     );
   };
 
-  if (loading)
-    return (
-      <div className="flex justify-center items-center min-h-screen">
-        Загрузка…
-      </div>
-    );
-
   return (
-    <div className="container mx-auto px-4 py-8 relative">
-      <div className="grid grid-cols-[128px_1fr_128px] gap-4 items-start mb-8">
-        <div>
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            {showFilters ? "Скрыть" : "Фильтры"}
-          </button>
-        </div>
-        <div className="text-center">
-          <h1 className="text-4xl font-bold text-gray-800 mb-2">
-            Стихотворения Б.И. Непомнящего
-          </h1>
-          <p className="text-gray-600">Избранное, 2020</p>
-        </div>
-        <div />
-      </div>
-
-      <div className="grid grid-cols-[128px_1fr_128px] gap-4">
-        <div />
-        <ResultsHeader />
-        <div />
-      </div>
-
-      {showFilters && (
-        <div className="absolute top-24 left-4 w-96 z-50 bg-white p-4 rounded-lg shadow-lg border">
-          <div className="flex justify-between items-center mb-2">
-            <h3 className="font-bold text-lg">Фильтры</h3>
+    <>
+      <div className="container mx-auto px-4 py-8 relative">
+        <div className="grid grid-cols-[128px_1fr_128px] gap-4 items-start mb-8">
+          <div>
             <button
-              onClick={() => setShowFilters(false)}
-              className="text-gray-500 hover:text-gray-700"
+              onClick={() => setShowFilters(!showFilters)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
             >
-              ✕
+              {showFilters ? "Скрыть" : "Фильтры"}
             </button>
           </div>
-          <FilterPanel
-            onApplyFilters={applyFilters}
-            poems={poems} // Передаем объединенные данные
-            activeFilters={activeFilters}
-            lemmas={lemmas}
-          />
+          <div className="text-center">
+            <h1 className="text-4xl font-bold text-gray-800 mb-2">
+              Стихотворения Б.И. Непомнящего
+            </h1>
+            <p className="text-gray-600">Избранное, 2020</p>
+            {/* Добавляем ссылку на страницу статистики */}
+            <Link
+              to="/statistics"
+              className="text-blue-600 hover:underline text-sm block mt-1"
+            >
+              Перейти к статистике
+            </Link>
+          </div>
+          <div />
         </div>
-      )}
 
-      <div className="grid grid-cols-[128px_1fr_128px] gap-4">
-        <div />
-        <div className="mb-16">
-          <PoemList
-            poems={filteredPoems}
-            resetPageOnFilter={Object.keys(activeFilters).length > 0}
-            key={JSON.stringify(activeFilters)}
-          />
-          {filteredPoems.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              Стихотворения по заданным фильтрам не найдены.
-            </div>
-          )}
+        <div className="grid grid-cols-[128px_1fr_128px] gap-4">
+          <div />
+          <ResultsHeader />
+          <div />
         </div>
-        <div />
+
+        {showFilters && (
+          <div className="absolute top-24 left-4 w-96 z-50 bg-white p-4 rounded-lg shadow-lg border">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-bold text-lg">Фильтры</h3>
+              <button
+                onClick={() => setShowFilters(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <FilterPanel
+              onApplyFilters={applyFilters}
+              poems={poems} // Передаем объединенные данные
+              activeFilters={activeFilters}
+              lemmas={lemmas}
+            />
+          </div>
+        )}
+
+        <div className="grid grid-cols-[128px_1fr_128px] gap-4">
+          <div />
+          <div className="mb-16">
+            <PoemList
+              poems={filteredPoems}
+              resetPageOnFilter={Object.keys(activeFilters).length > 0}
+              key={JSON.stringify(activeFilters)}
+            />
+            {filteredPoems.length === 0 && (
+              <div className="text-center py-8 text-gray-500">
+                Стихотворения по заданным фильтрам не найдены.
+              </div>
+            )}
+          </div>
+          <div />
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
+// --- Главный App компонент ---
 export default function App() {
   return (
     <Router>
-      <Routes>
-        <Route path="/" element={<AppContent />} />
-        <Route path="/poem/:id" element={<PoemPage />} />
-      </Routes>
+      <DataProvider>
+        {" "}
+        {/* Помещаем DataProvider на уровень Router */}
+        <Routes>
+          {/* Рендерим AppContent напрямую внутри DataProvider */}
+          <Route
+            path="/"
+            element={
+              <AppContent poems={[]} lemmas={{}} reverseLemmas={{}} /> // Заглушка, будет заменена ниже
+            }
+          />
+          <Route path="/poem/:id" element={<PoemPage />} />
+          <Route path="/statistics" element={<StatisticsPage />} />
+        </Routes>
+      </DataProvider>
+    </Router>
+  );
+}
+
+// --- Реальный App компонент, который получает данные от DataProvider ---
+function RealApp() {
+  const { poems, lemmas, reverseLemmas } = useAppContext();
+
+  if (!poems || !lemmas || !reverseLemmas) {
+    // Это условие может сработать, если что-то пойдёт не так, но DataProvider должен отрендерить после загрузки
+    return <div>Загрузка данных...</div>;
+  }
+
+  return (
+    <AppContent poems={poems} lemmas={lemmas} reverseLemmas={reverseLemmas} />
+  );
+}
+
+// Обновим маршрут, чтобы использовать RealApp
+export function AppWithRoutes() {
+  return (
+    <Router>
+      <DataProvider>
+        <Routes>
+          <Route path="/" element={<RealApp />} />
+          <Route path="/poem/:id" element={<PoemPage />} />
+          <Route path="/statistics" element={<StatisticsPage />} />
+        </Routes>
+      </DataProvider>
     </Router>
   );
 }
