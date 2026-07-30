@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "cross-env NODE_EXTRA_CA_CERTS=./russian-ca-bundle.pem node server.js",
+    "dev": "npm start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -14,5 +16,8 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "openai": "^6.16.0"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0"
   }
 }
