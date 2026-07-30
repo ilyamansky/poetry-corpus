@@ -33,7 +33,8 @@ const AIInsightButton = ({ insightRequestData }) => {
     setInsight(""); // Очистить предыдущий инсайт
 
     try {
-      const response = await fetch("http://localhost:5003/api/ai-insight", {
+      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5003";
+      const response = await fetch(`${API_URL}/api/ai-insight`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(promptData),
